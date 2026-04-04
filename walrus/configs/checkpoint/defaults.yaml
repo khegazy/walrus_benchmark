@@ -1,7 +1,7 @@
 _target_: walrus.trainer.checkpoints.CheckPointer
-save_dir: checkpoints/${name}
+save_dir: /global/u2/k/khegazy/projects/pde/walrus/walrus/checkpoints/${name}
 load_checkpoint_path: null # <path>/checkpoints/sharded_checkpoint_dir/
-coalesced_checkpoint_path: null # <path>/checkpoints/coalesced.pth # Only specify load_checkpoint_path or coalesced_checkpoint_path - coalesced uses a single checkpoint assumed to be on CPU
+coalesced_checkpoint_path: /global/u2/k/khegazy/projects/pde/walrus/walrus/checkpoints/walrus.pt # <path>/checkpoints/coalesced.pth # Only specify load_checkpoint_path or coalesced_checkpoint_path - coalesced uses a single checkpoint assumed to be on CPU
 save_best: True
 checkpoint_frequency: 20
 align_fields: True # Whether to align the fields in the checkpoint to the model, useful if there are new fields or the data is loaded in a different order

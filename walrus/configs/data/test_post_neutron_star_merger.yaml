@@ -1,15 +1,15 @@
 defaults:
-- field_index_map_override: bc_only_override
+- field_index_map_override: full_well_field_index
 well_base_path: /global/cfs/cdirs/m4790/Data/well/datasets/
 wandb_data_name: post_neutron_star_merger
 module_parameters:
   _target_: walrus.data.MixedWellDataModule
-  batch_size: 8
-  n_steps_input: 10
+  batch_size: 1
+  n_steps_input: 2
   n_steps_output: 1
   min_dt_stride: 1
   max_dt_stride: 1
-  max_samples: 2000
+  max_samples: 20
   well_dataset_info:
     post_neutron_star_merger:
       include_filters: []

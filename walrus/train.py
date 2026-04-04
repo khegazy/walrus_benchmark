@@ -335,6 +335,7 @@ def main(cfg: DictConfig):
         cfg.distribution.distribution_type.upper() != "LOCAL" and world_size > 1
     )
 
+    print(cfg)
     # Since configure_experiment uses distributed logic, distribution must be set up first
     device_mesh = configure_distribution(cfg)
     (

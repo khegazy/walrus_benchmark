@@ -18,9 +18,11 @@ export NCCL_DEBUG=WARN
 
 # module load python cuda cudnn gcc hdf5
 # Activate the virtual environment with all the dependencies
-export MODULEPATH=/mnt/home/gkrawezik/modules/rocky8:$MODULEPATH
-module load cuda/12.4 cudnn/9.1.0.70-cuda12 nccl/2.21.5-1+cuda12.4
-source /mnt/home/mmccabe/venvs/mamba_well/bin/activate
+#export MODULEPATH=/mnt/home/gkrawezik/modules/rocky8:$MODULEPATH
+#module load cuda/12.4 cudnn/9.1.0.70-cuda12 nccl/2.21.5-1+cuda12.4
+#source /mnt/home/mmccabe/venvs/mamba_well/bin/activate
+module load conda
+conda activate walrus
 
 
 # Launch the training script

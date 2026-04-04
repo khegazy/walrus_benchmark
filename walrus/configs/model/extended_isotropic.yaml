@@ -1,0 +1,24 @@
+defaults:
+  - encoder: extended_isotropic
+  - decoder: extended_isotropic
+  - processor: extended_isotropic
+  - norm_layer: extended_isotropic
+_target_: walrus.models.IsotropicModel
+hidden_dim: 1408
+projection_dim: 48
+intermediate_dim: 352
+processor_blocks: 40
+drop_path: 0.05
+groups: 16
+max_d: 3
+static_axes: true
+weight_tied_axes: false
+causal_in_time: true
+include_d:
+  - 2
+  - 3
+override_dimensionality: 0
+jitter_patches: true
+gradient_checkpointing_freq: 2
+use_periodic_fixed_jitter: true
+input_field_drop: 0.0

@@ -1,0 +1,15 @@
+space_mixing:
+  _partial_: true
+  _target_: walrus.models.spatial_blocks.full_attention.FullAttention
+  num_heads: 16
+  mlp_dim: null
+time_mixing:
+  _partial_: true
+  _target_: walrus.models.temporal_blocks.axial_time_attention.AxialTimeAttention
+  num_heads: 16
+  bias_type: rel
+channel_mixing:
+  _partial_: true
+  _target_: torch.nn.Identity
+_partial_: true
+_target_: walrus.models.spatiotemporal_blocks.space_time_split.SpaceTimeSplitBlock
