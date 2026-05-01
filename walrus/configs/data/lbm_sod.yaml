@@ -1,7 +1,7 @@
 defaults:
-- field_index_map_override: bc_only_override
-well_base_path: /global/cfs/cdirs/m4790/Data/well/datasets
-wandb_data_name: active_matter
+- field_index_map_override: lbm_field_index
+well_base_path: null
+wandb_data_name: lbm_sod
 module_parameters:
   _target_: walrus.data.MixedWellDataModule
   batch_size: 8
@@ -10,7 +10,9 @@ module_parameters:
   min_dt_stride: 1
   max_dt_stride: 1
   max_samples: 2000
+  max_rollout_steps: 200
   well_dataset_info:
-    active_matter:
+    lbm_sod:
       include_filters: []
       exclude_filters: []
+      path: datasets/kinet/sod/

@@ -11,12 +11,12 @@ export NCCL_DEBUG=WARN
 # Activate the virtual environment with all the dependencies
 # export MODULEPATH=/mnt/home/gkrawezik/modules/rocky8:$MODULEPATH
 # module load cuda/12.4 cudnn/9.1.0.70-cuda12 nccl/2.21.5-1+cuda12.4
-source /mnt/home/mmccabe/venvs/mamba_well/bin/activate
+#source /mnt/home/mmccabe/venvs/mamba_well/bin/activate
 
 
 # Launch the training script
-s
-python train.py distribution=local model=isotropic_model name=LocalExample trainer=globalnorm trainer.grad_acc_steps=1 server=rusty optimizer=adam optimizer.lr=1.e-4 logger.wandb_project_name="walrus_Debugging" \
+
+torchrun --nnodes 1 --nproc_per_node 4 train.py distribution=local model=isotropic_model name=LocalExample trainer=globalnorm trainer.grad_acc_steps=1 server=rusty optimizer=adam optimizer.lr=1.e-4 logger.wandb_project_name="walrus_Debugging" \
             trainer.enable_amp=False model.gradient_checkpointing_freq=1 trainer.log_interval=5 trainer.clip_gradient=10 data.module_parameters.batch_size=1 data.module_parameters.n_steps_input=6 data.module_parameters.n_steps_output=1   \
             model.projection_dim=48 model.intermediate_dim=352 model.hidden_dim=1408 model.groups=16 model.processor_blocks=40 model.drop_path=0.0 \
             model/processor/space_mixing=full_spatial_attention model.processor.space_mixing.num_heads=16 model.processor.time_mixing.num_heads=16 \
