@@ -1,0 +1,19 @@
+defaults:
+- field_index_map_override: full_well_field_index
+well_base_path: null
+wandb_data_name: lbm_doubly_periodic
+module_parameters:
+  _target_: walrus.data.MixedWellDataModule
+  batch_size: 2
+  n_steps_input: 6
+  n_steps_output: 1
+  min_dt_stride: 1
+  max_dt_stride: 1
+  max_samples: 2000
+  max_rollout_steps: 200
+  start_rollout_valid_output_at_t: 7
+  well_dataset_info:
+    lbm_doubly_periodic:
+      include_filters: []
+      exclude_filters: []
+      path: /global/u2/k/khegazy/projects/pde/walrus/datasets/kinet/doubly_periodic/weakly_compressible_isoT_fluids/sys_Re-5e4_Ma-1en1/D2Q9_shape-256-256_T-10000_H-dc804f_well-format

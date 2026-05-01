@@ -1,0 +1,45 @@
+defaults:
+  - trainer: globalnorm
+  - optimizer: adam
+  - lr_scheduler: inv_sqrt_w_sqrt_ramps_longer
+  - model: extended_isotropic
+  - data: lbm_sod_subsonic
+  - experiment: finetune_example
+  - server: local
+  - distribution: fsdp
+  - logger: none
+  - checkpoint: defaults
+  - finetuning_mods: all
+  - _self_
+data_workers: 2
+name: finetune_sod_subsonic
+finetune: True
+automatic_setup: True
+experiment_dir: /global/u2/k/khegazy/projects/pde/walrus/walrus/experiments
+
+# Override experiment defaults (finetune_example sets "experiments/test")
+folder_override: ""
+checkpoint_override: ""
+
+# Optimizer — lower LR for finetuning
+optimizer:
+  lr: 1e-4
+
+# Model — disable regularization during finetuning
+model:
+  drop_path: 0.0
+  input_field_drop: 0.0
+
+# Trainer — finetuning schedule
+trainer:
+  max_epoch: 51
+  grad_acc_steps: 4
+  clip_gradient: 10
+  val_frequency: 5
+  rollout_val_frequency: 5
+  skip_spectral_metrics: True
+  enable_amp: False
+  # Use samplewise normalization (no stats.yaml needed for custom data)
+  revin:
+    _target_: walrus.trainer.normalization_strat.SamplewiseRevNormalization
+    _partial_: True

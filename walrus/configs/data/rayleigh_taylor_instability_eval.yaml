@@ -1,0 +1,19 @@
+defaults:
+- field_index_map_override: full_well_field_index
+well_base_path: null
+wandb_data_name: rayleigh_taylor_instability_eval
+module_parameters:
+  _target_: walrus.data.MixedWellDataModule
+  batch_size: 1
+  n_steps_input: 3
+  n_steps_output: 1
+  min_dt_stride: 1
+  max_dt_stride: 1
+  max_samples: 100
+  max_rollout_steps: 50
+  start_rollout_valid_output_at_t: 17
+  well_dataset_info:
+    rayleigh_taylor_instability:
+      include_filters: []
+      exclude_filters: []
+      path: /global/cfs/cdirs/m4790/Data/well/datasets/rayleigh_taylor_instability

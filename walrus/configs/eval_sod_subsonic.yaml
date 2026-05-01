@@ -1,0 +1,46 @@
+defaults:
+  - trainer: globalnorm
+  - optimizer: adam
+  - lr_scheduler: inv_sqrt_w_sqrt_ramps_longer
+  - model: extended_isotropic
+  - data: lbm_sod_subsonic_eval
+  - experiment: defaults
+  - server: local
+  - distribution: fsdp
+  - logger: none
+  - checkpoint: defaults
+  - finetuning_mods: defaults
+  - _self_
+
+data_workers: 1
+name: eval_sod_subsonic
+finetune: False
+validation_mode: True
+automatic_setup: True
+experiment_dir: /global/u2/k/khegazy/projects/pde/walrus/walrus/experiments
+
+# Point to a specific output folder for this evaluation
+folder_override: /global/u2/k/khegazy/projects/pde/walrus/walrus/experiments/eval_sod_subsonic
+checkpoint_override: ""
+
+# Model — no regularization needed for eval
+model:
+  drop_path: 0.0
+  input_field_drop: 0.0
+
+# Trainer — evaluation settings
+trainer:
+  max_epoch: 1
+  val_frequency: 1
+  rollout_val_frequency: 1
+  short_validation_length: 200
+  max_rollout_steps: 200
+  skip_spectral_metrics: True
+  enable_amp: False
+  image_validation: True
+  video_validation: True
+  dump_prediction_to_disk: True
+  num_detailed_logs: 5
+  revin:
+    _target_: walrus.trainer.normalization_strat.SamplewiseRevNormalization
+    _partial_: True
