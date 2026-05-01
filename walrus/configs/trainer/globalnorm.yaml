@@ -1,6 +1,6 @@
 _target_: walrus.trainer.Trainer
 max_epoch: 200
-val_frequency: 2
+val_frequency: 5
 rollout_val_frequency: 5
 short_validation_length: 20
 max_rollout_steps: 60
