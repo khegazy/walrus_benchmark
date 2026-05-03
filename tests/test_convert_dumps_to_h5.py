@@ -153,6 +153,27 @@ def test_group_channels_tensor(cv):
     assert groups == [("stress", [0, 1, 2, 3])]
 
 
+def test_apply_field_renames_scalar(cv):
+    assert cv.apply_field_renames(
+        ["density", "internal_energy", "pressure"]
+    ) == ["density", "energy", "pressure"]
+
+
+def test_apply_field_renames_preserves_vector_suffix(cv):
+    # Vector component suffixes survive a rename of the base name.
+    assert cv.apply_field_renames(["internal_energy_x", "internal_energy_y"]) == [
+        "energy_x",
+        "energy_y",
+    ]
+
+
+def test_apply_field_renames_passthrough(cv):
+    assert cv.apply_field_renames(["velocity_x", "vorticity"]) == [
+        "velocity_x",
+        "vorticity",
+    ]
+
+
 def test_infer_experiment_name(cv, tmp_path):
     dump_dir = tmp_path / "experiments" / "eval_demo" / "viz" / "ds" / "full_trajectory_dumps"
     dump_dir.mkdir(parents=True)
@@ -430,10 +451,47 @@ def test_auto_compute_t0s_out_of_range(cv, tmp_path):
 # ----------------------------------------------------------------------------
 
 
+def test_write_forecast_h5_forecast_steps_filter(cv, tmp_path):
+    """Only the requested forecast steps should appear in the HDF5; others
+    are dropped, and out-of-range entries are silently warned away."""
+    T, X, Y, C = 5, 4, 4, 3
+    pred = np.random.default_rng(0).standard_normal((T, X, Y, C)).astype(np.float32)
+    ref = np.random.default_rng(1).standard_normal((T, X, Y, C)).astype(np.float32)
+    out = tmp_path / "f.h5"
+    cv.write_forecast_h5(
+        str(out),
+        pred_sample=pred,
+        ref_sample=ref,
+        field_names=["density", "velocity_x", "velocity_y"],
+        field_groups=[("density", [0]), ("velocity", [1, 2])],
+        t0=100,
+        dt_stride=2,
+        dataset_name="ds",
+        split="rollout_valid",
+        source_file="<test>",
+        forecast_steps=[1, 3, 99],  # 99 is out of range -> skipped
+    )
+    with h5py.File(out, "r") as f:
+        # n_steps suffix = forecast_step * dt_stride.
+        density_keys = sorted(k for k in f["density"].keys())
+        assert density_keys == ["pred_2", "pred_6", "target_2", "target_6"]
+        # time_index pred_2 -> t0 + 2 = 102; pred_6 -> 106.
+        assert int(f["time_index/pred_2"][0]) == 102
+        assert int(f["time_index/pred_6"][0]) == 106
+        # Round-trip: density at forecast_step=1 == pred[0, ..., 0].
+        np.testing.assert_allclose(
+            np.asarray(f["density/pred_2"][0]), pred[0, ..., 0], rtol=1e-6
+        )
+        np.testing.assert_allclose(
+            np.asarray(f["density/pred_6"][0]), pred[2, ..., 0], rtol=1e-6
+        )
+
+
 def test_end_to_end(cv, tmp_path, monkeypatch):
     """Synthetic dataset + dump pair -> kinet-style HDF5, with auto t0 and
     correct group structure / data round-trip."""
-    # 1. Build a Well dataset.
+    # 1. Build a Well dataset whose scalar list includes ``internal_energy``
+    #    (which the converter renames to ``energy`` in the output).
     ds_root = tmp_path / "wellds"
     _make_well_dataset(
         ds_root,
@@ -442,7 +500,7 @@ def test_end_to_end(cv, tmp_path, monkeypatch):
             "valid": np.linspace(2, 3, 5),
             "test":  np.linspace(4, 5, 5),
         },
-        scalar_fields=("density",),
+        scalar_fields=("density", "internal_energy"),
         vector_fields=("velocity",),
     )
 
@@ -464,16 +522,18 @@ def test_end_to_end(cv, tmp_path, monkeypatch):
     (exp_dir / "extended_config.yaml").write_text(cfg_yaml)
 
     # 3. Build a synthetic ypred/yref pair under viz/synth/full_trajectory_dumps.
+    #    4 channels: density, internal_energy, velocity_x, velocity_y.
     dump_dir = exp_dir / "viz" / "synth" / "full_trajectory_dumps"
     dump_dir.mkdir(parents=True)
-    B, T, X, Y, C = 1, 3, 4, 4, 3  # 3 channels: density, velocity_x, velocity_y
+    B, T, X, Y, C = 1, 5, 4, 4, 4
     rng = np.random.default_rng(42)
     ypred = rng.standard_normal((B, T, X, Y, C)).astype(np.float32)
     yref = rng.standard_normal((B, T, X, Y, C)).astype(np.float32)
     np.save(dump_dir / "ypred_synth_rollout_valid_epoch1_rank0_0.npy", ypred)
     np.save(dump_dir / "yref_synth_rollout_valid_epoch1_rank0_0.npy", yref)
 
-    # 4. Run main() with --split valid --world-size 1, mocking sys.argv.
+    # 4. Run main() with --forecast-steps 1 3 -> only those steps persist;
+    #    --split valid, --world-size 1.
     monkeypatch.setattr(
         sys, "argv",
         [
@@ -481,6 +541,7 @@ def test_end_to_end(cv, tmp_path, monkeypatch):
             str(dump_dir),
             "--split", "valid",
             "--world-size", "1",
+            "--forecast-steps", "1", "3",
         ],
     )
     cv.main()
@@ -490,25 +551,36 @@ def test_end_to_end(cv, tmp_path, monkeypatch):
     out_path = dump_dir / "h5" / "forecast_t0-6.h5"
     assert out_path.exists()
     with h5py.File(out_path, "r") as f:
-        assert set(f.keys()) == {"density", "velocity", "t_index"}
-        # density is scalar (1 channel), velocity is 2D vector (2 channels).
+        # internal_energy was renamed to energy.
+        assert set(f.keys()) == {"density", "energy", "velocity", "time_index"}
         assert f["density/pred_1"].shape == (1, X, Y)
+        assert f["energy/pred_1"].shape == (1, X, Y)
         assert f["velocity/pred_1"].shape == (2, X, Y)
-        # T=3 -> step labels 1, 2, 3.
-        assert sorted(int(k.split("_")[1]) for k in f["density"].keys() if k.startswith("pred_")) == [1, 2, 3]
-        # t_index pred_1 = t0 + 1 = 7.
-        assert int(f["t_index/pred_1"][0]) == 7
-        assert int(f["t_index/pred_3"][0]) == 9
-        # Round-trip: density at step 1 == ypred[0, 0, ..., 0].
+        # --forecast-steps 1 3 -> only pred_1 and pred_3 (and target_*).
+        density_pred_keys = sorted(
+            int(k.split("_")[1]) for k in f["density"].keys() if k.startswith("pred_")
+        )
+        assert density_pred_keys == [1, 3]
+        # time_index pred_1 = t0 + 1 = 7; pred_3 = 9.
+        assert int(f["time_index/pred_1"][0]) == 7
+        assert int(f["time_index/pred_3"][0]) == 9
+        # The root attr field_names reflects the post-rename channel names.
+        assert list(f.attrs["field_names"]) == [
+            "density",
+            "energy",
+            "velocity_x",
+            "velocity_y",
+        ]
+        # Round-trip: energy at forecast_step=1 == ypred[0, 0, ..., 1].
         np.testing.assert_allclose(
-            np.asarray(f["density/pred_1"][0]), ypred[0, 0, ..., 0], rtol=1e-6
+            np.asarray(f["energy/pred_1"][0]), ypred[0, 0, ..., 1], rtol=1e-6
         )
         np.testing.assert_allclose(
             np.asarray(f["velocity/pred_1"]),
-            np.moveaxis(ypred[0, 0, ..., 1:], -1, 0),
+            np.moveaxis(ypred[0, 0, ..., 2:], -1, 0),
             rtol=1e-6,
         )
-        # Reference round-trip too.
+        # Reference round-trip.
         np.testing.assert_allclose(
-            np.asarray(f["density/target_1"][0]), yref[0, 0, ..., 0], rtol=1e-6
+            np.asarray(f["density/target_3"][0]), yref[0, 2, ..., 0], rtol=1e-6
         )
