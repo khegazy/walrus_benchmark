@@ -18,8 +18,8 @@ This script reorganises those dumps into HDF5 files that match the kinet
         velocity/pred_{n_steps}           (n_components, X, Y[, Z])
         velocity/target_{n_steps}         (n_components, X, Y[, Z])
         ...
-        t_index/pred_{n_steps}            (1,)  -> [t0 + n_steps]
-        t_index/target_{n_steps}          (1,)
+        time_index/pred_{n_steps}            (1,)  -> [t0 + n_steps]
+        time_index/target_{n_steps}          (1,)
 
 Field names and their channel order are detected automatically from the
 evaluation config (``walrus/configs/<experiment_name>.yaml``) and the Well
@@ -51,6 +51,29 @@ _DUMP_PATTERN = re.compile(
     r"^ypred_(?P<dset>.+?)_(?P<split>rollout_(?:valid|test))"
     r"_epoch(?P<epoch>\d+)_rank(?P<rank>\d+)_(?P<batch>\d+)\.npy$"
 )
+
+
+# Walrus field names that should be renamed in the output HDF5 to match the
+# kinet naming convention used by downstream analysis.
+FIELD_NAME_RENAMES: Dict[str, str] = {
+    "internal_energy": "energy",
+}
+
+
+def apply_field_renames(field_names: List[str]) -> List[str]:
+    """Apply ``FIELD_NAME_RENAMES`` to flat channel names. Suffix-aware: a
+    rename of ``foo`` -> ``bar`` applies to both ``foo`` (scalar) and
+    ``foo_x`` / ``foo_xy`` (vector / tensor components), so callers can
+    keep using ``group_channels_by_field`` afterwards.
+    """
+    suffix_re = re.compile(r"_([xyz]{1,2})$")
+    out: List[str] = []
+    for name in field_names:
+        m = suffix_re.search(name)
+        base = name[: m.start()] if m else name
+        suffix = m.group(0) if m else ""
+        out.append(FIELD_NAME_RENAMES.get(base, base) + suffix)
+    return out
 
 
 @dataclass
@@ -323,7 +346,7 @@ def auto_compute_t0s(
 
     Convention: ``t0`` is the global-timeline index of the **last input
     frame** of the rollout (matching the kinet ``forecast_t0-N.h5`` files,
-    where ``t_index/pred_<n_steps> = t0 + n_steps``).
+    where ``time_index/pred_<n_steps> = t0 + n_steps``).
 
     Within a trajectory, the rollout's first prediction is at local index
     ``rollout_start = max(Ni * dt_stride, start_rollout_valid_output_at_t)``
@@ -440,11 +463,31 @@ def write_forecast_h5(
     dataset_name: str,
     split: str,
     source_file: str,
+    forecast_steps: Optional[List[int]] = None,
 ) -> None:
+    """Write one ``forecast_t0-<t0>.h5`` from a single rollout sample.
+
+    ``forecast_steps`` (1-indexed) selects which rollout steps to persist:
+    ``forecast_step=k`` corresponds to rollout-tensor index ``t=k-1`` and
+    HDF5 dataset suffix ``k * dt_stride`` (so e.g. ``forecast_steps=[1,5,10]``
+    yields ``pred_<dt_stride>``, ``pred_<5*dt_stride>``, ``pred_<10*dt_stride>``
+    when applicable). Steps outside ``[1, T]`` are skipped with a warning.
+    ``None`` (default) saves every rollout step.
+    """
     T = pred_sample.shape[0]
-    spatial_axes = pred_sample.ndim - 2  # T, ...spatial..., C
-    # Move components-axis from last to first per kinet convention.
-    # Resulting per-step array shape: (C_g, *spatial)
+    if forecast_steps is None:
+        selected_t = list(range(T))
+    else:
+        selected_t = []
+        for k in forecast_steps:
+            if 1 <= k <= T:
+                selected_t.append(k - 1)
+            else:
+                print(
+                    f"Warning: forecast step {k} out of range [1, {T}] for "
+                    f"{out_path}; skipping.",
+                    file=sys.stderr,
+                )
     with h5py.File(out_path, "w") as f:
         f.attrs["dataset_name"] = dataset_name
         f.attrs["split"] = split
@@ -453,11 +496,11 @@ def write_forecast_h5(
         f.attrs["field_names"] = np.array(field_names, dtype=h5py.string_dtype())
         f.attrs["source_file"] = source_file
 
-        for group_name, channel_idxs in field_groups:
+        for group_name, _ in field_groups:
             f.create_group(group_name)
-        f.create_group("t_index")
+        f.create_group("time_index")
 
-        for t in range(T):
+        for t in selected_t:
             n_steps = (t + 1) * dt_stride
             for group_name, channel_idxs in field_groups:
                 # Pred / target slices: pick channels, move components-axis to front.
@@ -467,10 +510,9 @@ def write_forecast_h5(
                 ref = np.moveaxis(ref, -1, 0).astype(np.float64, copy=False)
                 f[group_name].create_dataset(f"pred_{n_steps}", data=pred)
                 f[group_name].create_dataset(f"target_{n_steps}", data=ref)
-            t_index_value = np.array([t0 + n_steps], dtype=np.int64)
-            f["t_index"].create_dataset(f"pred_{n_steps}", data=t_index_value)
-            f["t_index"].create_dataset(f"target_{n_steps}", data=t_index_value)
-        _ = spatial_axes  # silence unused; kept for future shape assertions
+            time_index_value = np.array([t0 + n_steps], dtype=np.int64)
+            f["time_index"].create_dataset(f"pred_{n_steps}", data=time_index_value)
+            f["time_index"].create_dataset(f"target_{n_steps}", data=time_index_value)
 
 
 def main():
@@ -522,6 +564,15 @@ def main():
         "(batch_idx * world_size + rank) * batch_size + b. Default 1 "
         "(single-rank or local). Set to the number of GPUs the eval used "
         "(e.g. 4 for --gpus-per-node=4 with 1 node).",
+    )
+    parser.add_argument(
+        "--forecast-steps",
+        nargs="+",
+        type=int,
+        default=None,
+        help="1-indexed list of forecast steps to save (e.g. 1 5 10 50 keeps "
+        "only those rollout indices, written as pred_<k*dt_stride>). "
+        "Default: save every rollout step in the dump.",
     )
     parser.add_argument(
         "--output-dir",
@@ -586,6 +637,7 @@ def main():
                 f"({field_names}). Source: {well_file}."
             )
 
+        field_names = apply_field_renames(field_names)
         field_groups = group_channels_by_field(field_names)
 
         ypred = np.load(d.pred_path)  # (B, T, ...spatial..., C)
@@ -605,6 +657,7 @@ def main():
                 dataset_name=d.dataset_name,
                 split=d.split,
                 source_file=d.pred_path,
+                forecast_steps=args.forecast_steps,
             )
             print(
                 f"Wrote {out_path}  "
