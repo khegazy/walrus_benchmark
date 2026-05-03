@@ -328,6 +328,113 @@ python train.py --config-name=eval_<name> \
 
 Compare the loss dicts from both runs to see if finetuning improved performance.
 
+### Convert prediction dumps to kinet-style HDF5
+
+The eval run's `full_trajectory_dumps/` directory contains flat NumPy arrays
+with shape `(B, T, ...spatial..., C)` — channel-flat across all Walrus
+fields. To consume these with the same analysis tooling used for kinet
+solver / FNO forecast files, convert them to the
+`forecast_t0-{t0}.h5` layout via `scripts/convert_dumps_to_h5.py`:
+
+```
+forecast_t0-{t0}.h5
+├── density/                       # one group per Walrus field
+│   ├── pred_{n_steps}             # (n_components, ...spatial...)
+│   └── target_{n_steps}
+├── velocity/                      # vector fields stacked components-first
+│   ├── pred_{n_steps}             # (n_components, ...spatial...)
+│   └── target_{n_steps}
+├── ...
+└── time_index/                    # absolute simulation step indices
+    ├── pred_{n_steps}             # int64 array [t0 + n_steps]
+    └── target_{n_steps}
+```
+
+The converter is wired into every standard eval submission script
+(`walrus/run_scripts/eval_*.sh`) and runs automatically after `torchrun`
+finishes, picking up `CONFIG_NAME` and
+`WORLD_SIZE = SLURM_JOB_NUM_NODES * SLURM_GPUS_PER_NODE` from the script:
+
+```bash
+EXPERIMENT_DIR=/global/u2/k/khegazy/projects/pde/walrus/walrus/experiments/$CONFIG_NAME
+for dump_dir in "$EXPERIMENT_DIR"/viz/*/full_trajectory_dumps; do
+    [ -d "$dump_dir" ] || continue
+    python /global/u2/k/khegazy/projects/pde/walrus/scripts/convert_dumps_to_h5.py \
+        "$dump_dir" \
+        --experiment-name "$CONFIG_NAME" \
+        --world-size "$WORLD_SIZE"
+done
+```
+
+You only need to invoke the converter manually if you want to re-run
+conversion with different options (e.g. a different forecast-step subset)
+without re-running the eval. From the repo root:
+
+```bash
+module load conda
+conda activate walrus
+python scripts/convert_dumps_to_h5.py \
+    walrus/experiments/<CONFIG_NAME>/viz/<DATASET>/full_trajectory_dumps \
+    --experiment-name <CONFIG_NAME> \
+    --world-size <N_GPUS_USED_BY_THE_RUN> \
+    [--forecast-steps 1 5 10 25 50 75]   # optional subset of rollout steps
+```
+
+#### Flags
+
+| Flag | Purpose |
+|------|---------|
+| `dump_dir` (positional) | Path to a `full_trajectory_dumps/` directory. |
+| `--experiment-name` | Eval experiment name (matches `walrus/configs/<name>.yaml` and `walrus/experiments/<name>/`). Inferred from `dump_dir` if omitted. |
+| `--world-size` | Number of ranks the original eval run used (e.g. `4` for `--gpus-per-node=4 --nodes=1`, `8` for `--nodes=2`). Required for multi-GPU runs because only rank 0 dumps. Default `1`. |
+| `--forecast-steps` | 1-indexed list of rollout steps to keep, e.g. `1 5 10 25 50 75`. The HDF5 dataset suffix is `forecast_step * dt_stride`. Steps outside `[1, T]` are silently skipped with a warning. Default: save every step in the dump. |
+| `--t0s` | Manual override for the per-sample `t0` list. By default, t0 is auto-computed (see below). |
+| `--dt-stride` | Override the `dt_stride` read from the run snapshot. |
+| `--field-names` | Manual override for the channel→field mapping. Defaults to auto-detection from the Well dataset's `t0_fields/t1_fields` attrs. |
+| `--split` | Restrict to dumps from one split (`valid` or `test`). |
+| `--output-dir` | Where to write the `forecast_t0-*.h5` files. Default: `<dump_dir>/h5/`. |
+
+#### How `t0` is computed
+
+`t0` is the global-timeline index of the **last input frame** of the
+rollout (matching the kinet convention, where
+`time_index/pred_{n_steps} = t0 + n_steps`). The converter:
+
+1. Loads the run's frozen snapshot at
+   `walrus/experiments/<CONFIG_NAME>/extended_config.yaml` to read
+   `n_steps_input`, `dt_stride`, and `start_rollout_valid_output_at_t`.
+2. Walks the Well dataset's `data/{train,valid,test}/` directories in that
+   order, reading per-trajectory step counts from `t0_fields/<field>.shape`
+   and split-boundary timestamps from `dimensions/time`. Trajectories that
+   share an exact boundary timestamp (the 1-frame overlap that
+   `convert_lbm_to_well.py` introduces) are not double-counted.
+3. Maps each dump file to a split-local trajectory using the distributed
+   sampler's stripe formula
+   `traj_idx = (batch_idx * world_size + rank) * batch_size + b`.
+4. Computes
+   `t0 = global_offset + max(n_steps_input * dt_stride, start_rollout_valid_output_at_t) - dt_stride`.
+
+For example, sod_subsonic with `n_steps_input=6`, `dt_stride=1`,
+`start_rollout_valid_output_at_t=7`, and split sizes
+train/valid/test = 500/101/402 (with 1-frame overlap at each boundary):
+
+| Dump | Split-local traj idx | Global offset | Last input | **t0** |
+|---|---:|---:|---:|---:|
+| valid sample 0 | 0 | 499 | 6 | **505** |
+| test sample 0  | 0 | 599 | 6 | **605** |
+
+#### Channel → group mapping
+
+Field names and their channel order are auto-detected from the Well
+dataset (`t<i>_fields.attrs["field_names"]`, expanded with the
+`spatial_dims` attr to produce `velocity_x/y[/z]`, `stress_xx/xy/...`).
+Channels with a common stripped suffix collapse into a single group with
+a leading components axis: `velocity_x, velocity_y` →
+`velocity/pred_{n_steps}` of shape `(2, ...spatial...)`.
+
+The Walrus field name `internal_energy` is renamed to `energy` in the
+HDF5 output so the file matches kinet's naming convention.
+
 ### Troubleshooting
 
 | Error | Cause | Fix |
@@ -951,6 +1058,7 @@ Here's every file involved and its role:
 | File | Role |
 |------|------|
 | `scripts/convert_lbm_to_well.py` | Converts kinet HDF5 → Well format |
+| `scripts/convert_dumps_to_h5.py` | Converts eval `full_trajectory_dumps/*.npy` → kinet-style `forecast_t0-*.h5` |
 | `walrus/configs/data/<name>.yaml` | Data config: paths, batch size, field index |
 | `walrus/configs/data/field_index_map_override/full_well_field_index.yaml` | 67-field index map (matches pretrained checkpoint) |
 | `walrus/configs/data/field_index_map_override/lbm_field_index.yaml` | 68-field index map (adds vorticity — do NOT use for finetuning) |
